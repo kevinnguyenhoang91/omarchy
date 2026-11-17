@@ -2,6 +2,30 @@
 
 # omarchy:summary=Reload opencode configuration (used by the Omarchy theme switching).
 
-if pgrep -x opencode >/dev/null; then
-  killall -SIGUSR2 opencode
-fi
+# OpenCode's TUI rebuilds its "system" theme when it receives SIGUSR2. Native
+# installs expose the process as "opencode", while npm/mise installs use
+# "opencode.exe". pgrep/killall -x only matches the former, so a theme switch
+# leaves npm/mise users stuck with the previous palette. Match both names by
+# PID instead.
+#
+# Only signal interactive TUIs. The detached `serve --service` process has no
+# controlling terminal and no TUI theme handler, so an unhandled SIGUSR2 would
+# terminate the background service.
+
+signalled=0
+
+while IFS= read -r pid; do
+  [[ -n $pid && -r /proc/$pid/comm ]] || continue
+
+  case "$(<"/proc/$pid/comm")" in
+    opencode | opencode.exe) ;;
+    *) continue ;;
+  esac
+
+  # An interactive TUI owns a /dev/pts/* stdin; the headless service uses /dev/null.
+  [[ $(readlink "/proc/$pid/fd/0" 2>/dev/null) == /dev/pts/* ]] || continue
+
+  kill -USR2 "$pid" 2>/dev/null && signalled=1
+done < <(pgrep -f '(^|/)opencode(\.exe)?( |$)' 2>/dev/null || true)
+
+(( signalled )) || exit 0
